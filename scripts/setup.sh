@@ -7,7 +7,7 @@ TUNNEL_ID="${1:?Usage: setup.sh <tunnel_id> <gateway_port> <gateway_token>}"
 GATEWAY_PORT="${2:?Usage: setup.sh <tunnel_id> <gateway_port> <gateway_token>}"
 GATEWAY_TOKEN="${3:?Usage: setup.sh <tunnel_id> <gateway_port> <gateway_token>}"
 
-RELAY_URL="wss://relay-production-724a.up.railway.app"
+RELAY_URL="wss://relay-production-62fa.up.railway.app"
 TUNNEL_SECRET="corgi-tunnel-2026"
 DASHBOARD_ORIGIN="https://dashboard-production-3553.up.railway.app"
 
@@ -64,7 +64,7 @@ echo "[setup] ✓ Tunnel running (PID: $!)"
 
 # Verify
 sleep 4
-HEALTH=$(curl -s "https://relay-production-724a.up.railway.app/health" 2>/dev/null)
+HEALTH=$(curl -s "https://relay-production-62fa.up.railway.app/health" 2>/dev/null)
 if echo "$HEALTH" | grep -q "\"$TUNNEL_ID\""; then
   echo "[setup] ✓ Tunnel '$TUNNEL_ID' visible on relay"
   echo "[setup]"

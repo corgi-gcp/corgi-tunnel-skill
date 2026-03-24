@@ -14,7 +14,7 @@ Browser → Dashboard (Railway) → Relay (Railway) → Tunnel (this machine) �
 ```
 
 - **Dashboard**: Static SPA at `https://dashboard-production-3553.up.railway.app`
-- **Relay**: WebSocket router at `wss://relay-production-724a.up.railway.app`
+- **Relay**: WebSocket router at `wss://relay-production-62fa.up.railway.app`
 - **Tunnel**: Node.js client running locally, connects outbound to relay
 - **Gateway**: Eragon gateway on `127.0.0.3:<port>` (port from eragon.json)
 
@@ -26,7 +26,7 @@ The Eragon gateway speaks first — it sends a `connect.challenge` (nonce) befor
 
 Multiple Mac minis can connect simultaneously. Each tunnel registers with a unique `TUNNEL_ID` and declares its gateway token(s) via `register_tokens`. The relay routes each browser to the correct tunnel based on which token they authenticate with.
 
-Relay health: `curl -s https://relay-production-724a.up.railway.app/health` — shows all connected tunnels and browser count.
+Relay health: `curl -s https://relay-production-62fa.up.railway.app/health` — shows all connected tunnels and browser count.
 
 ## Security Notes
 
@@ -64,7 +64,7 @@ bash <SKILL_DIR>/scripts/setup.sh <tunnel_id> <port> <token>
 - `port`: gateway port from step 1
 - `token`: gateway auth token from step 1
 
-3. Verify: `curl -s https://relay-production-724a.up.railway.app/health | python3 -m json.tool`
+3. Verify: `curl -s https://relay-production-62fa.up.railway.app/health | python3 -m json.tool`
    — the tunnel ID should appear in `tunnelDetails`.
 
 4. Tell the user their dashboard URL, WebSocket URL, and auth token (for browser Settings).
@@ -109,7 +109,7 @@ Run this first for any connectivity issue:
 echo "=== TUNNEL PROCESS ===" && \
 pgrep -af "client.js" | grep -v pgrep || echo "DEAD" && \
 echo "" && echo "=== RELAY ===" && \
-curl -s "https://relay-production-724a.up.railway.app/health" | python3 -m json.tool && \
+curl -s "https://relay-production-62fa.up.railway.app/health" | python3 -m json.tool && \
 echo "" && echo "=== LOG (last 10) ===" && \
 tail -10 /tmp/tunnel-client.log
 ```
@@ -135,7 +135,7 @@ nohup bash -c 'while true; do node client.js >> /tmp/tunnel-client.log 2>&1; sle
 #### Step 2: Is the tunnel registered on the relay?
 
 ```bash
-curl -s https://relay-production-724a.up.railway.app/health | python3 -m json.tool
+curl -s https://relay-production-62fa.up.railway.app/health | python3 -m json.tool
 ```
 
 Check `tunnelDetails` for your tunnel ID. Common issues:
@@ -208,7 +208,7 @@ Expected: `OPEN → event connect.challenge → sent connect → res (hello-ok) 
 cd ~/corgi-tunnel/client && source .env && export GATEWAY_TOKEN
 node -e "
 const WS=require('ws');
-const ws=new WS('wss://relay-production-724a.up.railway.app/ws?token='+encodeURIComponent(process.env.GATEWAY_TOKEN));
+const ws=new WS('wss://relay-production-62fa.up.railway.app/ws?token='+encodeURIComponent(process.env.GATEWAY_TOKEN));
 ws.on('open',()=>console.log('RELAY OPEN'));
 ws.on('message',d=>{const m=JSON.parse(d.toString());console.log(m.type,m.event||'');if(m.event==='connect.challenge'){ws.send(JSON.stringify({type:'req',id:'t1',method:'connect',params:{minProtocol:3,maxProtocol:3,auth:{token:process.env.GATEWAY_TOKEN},role:'operator',scopes:['operator.admin'],caps:['tool-events'],client:{id:'test',version:'1.0.0'}}}));console.log('→ sent connect')}});
 ws.on('close',(c,r)=>console.log('CLOSED',c,r.toString()));
@@ -221,7 +221,7 @@ setTimeout(()=>{ws.close();process.exit(0)},8000);
 cd ~/corgi-tunnel/client && source .env && export GATEWAY_TOKEN
 node -e "
 const WS=require('ws');
-const ws=new WS('wss://relay-production-724a.up.railway.app/ws?token='+encodeURIComponent(process.env.GATEWAY_TOKEN));
+const ws=new WS('wss://relay-production-62fa.up.railway.app/ws?token='+encodeURIComponent(process.env.GATEWAY_TOKEN));
 let ok=false;
 ws.on('message',d=>{
   const m=JSON.parse(d.toString());
@@ -261,7 +261,7 @@ Compare with what's in the deploy repo. If they don't match → `serve.js` is lo
 ### Browser Shows "Disconnected" (Never Connects)
 
 - No token entered in dashboard Settings
-- Wrong WebSocket URL (must be `wss://relay-production-724a.up.railway.app/ws`)
+- Wrong WebSocket URL (must be `wss://relay-production-62fa.up.railway.app/ws`)
 - Service worker caching stale HTML/JS → hard refresh (Cmd+Shift+R)
 - Try incognito to rule out extensions
 
@@ -277,7 +277,7 @@ Compare with what's in the deploy repo. If they don't match → `serve.js` is lo
 ## .env Reference
 
 ```bash
-RELAY_URL=wss://relay-production-724a.up.railway.app
+RELAY_URL=wss://relay-production-62fa.up.railway.app
 GATEWAY_URL=ws://127.0.0.3:<PORT>
 GATEWAY_TOKEN=<from eragon.json gateway.auth.token>
 TUNNEL_SECRET=corgi-tunnel-2026
@@ -307,7 +307,7 @@ After setup, send the user:
 >
 > 1. Open: https://dashboard-production-3553.up.railway.app
 > 2. Click ⚙️ (top right)
-> 3. Set **WebSocket URL** to: `wss://relay-production-724a.up.railway.app/ws`
+> 3. Set **WebSocket URL** to: `wss://relay-production-62fa.up.railway.app/ws`
 > 4. Set **Auth Token** to: `<their token>`
 > 5. Click **Save & Reconnect**
 >
