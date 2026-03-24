@@ -1,6 +1,6 @@
 ---
 name: corgi-tunnel
-description: Set up, diagnose, and maintain the Corgi Dashboard tunnel connecting this Eragon gateway to the shared web relay. Use when asked to set up the dashboard, connect to the relay, start the tunnel, enable the web UI, fix "Reconnecting" issues, or troubleshoot connectivity. Triggers on "corgi dashboard", "tunnel setup", "web UI", "relay connection", "reconnecting", "disconnected", "tunnel down", "tunnel not working".
+description: Set up, diagnose, and maintain the Corgi Dashboard tunnel connecting this Eragon gateway to the shared web relay. Use when asked to set up the dashboard, connect to the relay, start the tunnel, enable the web UI, fix "Reconnecting" issues, or troubleshoot connectivity. Triggers on "corgi dashboard", "tunnel setup", "web UI", "relay connection", "reconnecting", "disconnected", "tunnel down", "tunnel not working", "chat history not loading".
 ---
 
 # Corgi Dashboard Tunnel
@@ -21,6 +21,12 @@ Browser → Dashboard (Railway) → Relay (Railway) → Tunnel (this machine) �
 ### Key Protocol Details
 
 The Eragon gateway speaks first — it sends a `connect.challenge` (nonce) before the browser sends anything. The browser responds with `{type:"req", method:"connect", params:{auth:{token:"..."}}}`. The relay must route the browser to the correct tunnel **immediately on connect** (before any messages), using the gateway token passed as a URL query param: `/ws?token=<TOKEN>`.
+
+### Multi-Tunnel Routing
+
+Multiple Mac minis can connect simultaneously. Each tunnel registers with a unique `TUNNEL_ID` and declares its gateway token(s) via `register_tokens`. The relay routes each browser to the correct tunnel based on which token they authenticate with.
+
+Relay health: `curl -s https://relay-production-724a.up.railway.app/health` — shows all connected tunnels and browser count.
 
 ## Security Notes
 
@@ -65,11 +71,17 @@ bash <SKILL_DIR>/scripts/setup.sh <tunnel_id> <port> <token>
 
 ### Keepalive Setup (Critical)
 
-The tunnel process dies silently when the parent shell session is cleaned up, when the relay redeploys, or when the Mac sleeps. **Always set up a keepalive** using one of these methods (in order of preference):
+The tunnel process dies silently and frequently. Known causes:
+- Parent shell session cleaned up by OS
+- Relay redeploys (Railway push triggers new container, all tunnel WS connections drop)
+- Mac sleep/wake
+- `nohup` processes are NOT reliable long-term on macOS
+
+**Always set up a keepalive.** Options in order of preference:
 
 **Option A — Eragon Cron (recommended, always works):**
 
-Create a cron job that checks every 2 minutes:
+Create a cron job that fires every 2 minutes:
 ```
 Schedule: every 120000ms
 Payload (systemEvent): "TUNNEL KEEPALIVE: Run pgrep -f 'node.*client.js'. If no process, run /path/to/ensure-running.sh. If running, reply HEARTBEAT_OK."
@@ -80,18 +92,31 @@ Session target: main
 ```bash
 * * * * * /path/to/ensure-running.sh
 ```
-Note: `crontab` may be blocked by macOS permissions (operation not permitted). Use Option A instead.
+Note: `crontab` is often blocked by macOS permissions (operation not permitted). Use Option A.
 
 **Option C — launchd (macOS):**
-LaunchAgents require write access to `~/Library/LaunchAgents/` — agent processes often get EPERM. Use Option A instead.
+LaunchAgents require write access to `~/Library/LaunchAgents/` — agent processes usually get EPERM. Use Option A.
 
-The `ensure-running.sh` script (created by setup.sh) checks `pgrep` and restarts the watchdog if dead.
+The `ensure-running.sh` script checks `pgrep`, verifies the tunnel is registered on the relay health endpoint, kills zombie processes, and restarts the watchdog if needed.
 
 ## Troubleshooting Guide
 
+### Quick Health Check
+
+Run this first for any connectivity issue:
+
+```bash
+echo "=== TUNNEL PROCESS ===" && \
+pgrep -af "client.js" | grep -v pgrep || echo "DEAD" && \
+echo "" && echo "=== RELAY ===" && \
+curl -s "https://relay-production-724a.up.railway.app/health" | python3 -m json.tool && \
+echo "" && echo "=== LOG (last 10) ===" && \
+tail -10 /tmp/tunnel-client.log
+```
+
 ### "Reconnecting..." in Dashboard
 
-This is the most common issue. Diagnose with this sequence:
+Most common issue. Work through this sequence:
 
 #### Step 1: Is the tunnel process alive?
 
@@ -99,14 +124,11 @@ This is the most common issue. Diagnose with this sequence:
 pgrep -af "client.js" | grep -v pgrep
 ```
 
-If no output → tunnel is dead. Restart it:
-```bash
-bash /path/to/ensure-running.sh
-```
-Or manually:
+If no output → tunnel is dead. Run `ensure-running.sh` or restart manually:
 ```bash
 cd ~/corgi-tunnel/client && source .env
 export RELAY_URL GATEWAY_URL GATEWAY_TOKEN TUNNEL_SECRET TUNNEL_ID DASHBOARD_ORIGIN
+pkill -f "node.*client\.js" 2>/dev/null; sleep 1
 nohup bash -c 'while true; do node client.js >> /tmp/tunnel-client.log 2>&1; sleep 3; done' &
 ```
 
@@ -116,12 +138,10 @@ nohup bash -c 'while true; do node client.js >> /tmp/tunnel-client.log 2>&1; sle
 curl -s https://relay-production-724a.up.railway.app/health | python3 -m json.tool
 ```
 
-Check `tunnelDetails` for your tunnel ID. If missing:
-- Tunnel process may be running but disconnected (check log)
-- Relay may have redeployed (tunnel auto-reconnects in 3s)
-- `TUNNEL_SECRET` may be wrong — must be `corgi-tunnel-2026`
-
-**Known issue:** Relay can show a stale tunnel as "connected" for up to 60s after the process dies (WebSocket ping timeout lag). Check `pgrep` first, don't trust `/health` alone.
+Check `tunnelDetails` for your tunnel ID. Common issues:
+- **Tunnel process alive but not in health response**: Relay may have redeployed. Tunnel auto-reconnects in 3s, but check log for errors.
+- **Known issue**: Relay can show a stale tunnel as "connected" for up to 60s after the process dies (WebSocket ping timeout). Always check `pgrep` first.
+- Wrong `TUNNEL_SECRET` — must be `corgi-tunnel-2026`
 
 #### Step 3: Is the gateway running?
 
@@ -129,7 +149,7 @@ Check `tunnelDetails` for your tunnel ID. If missing:
 lsof -i -P | grep <PORT> | head -3
 ```
 
-Replace `<PORT>` with the gateway port from `.env`. Should show a `node` process LISTENING. If not, the Eragon gateway itself is down — restart it with `eragon gateway restart`.
+Replace `<PORT>` with the gateway port from `.env`. Should show a `node` process LISTENING. If not → `eragon gateway restart`.
 
 #### Step 4: Check the tunnel log
 
@@ -137,7 +157,7 @@ Replace `<PORT>` with the gateway port from `.env`. Should show a `node` process
 tail -30 /tmp/tunnel-client.log
 ```
 
-**Healthy pattern:**
+**Healthy log:**
 ```
 [tunnel:ID] Connecting to relay...
 [tunnel:ID] ✓ Connected to relay
@@ -146,31 +166,32 @@ tail -30 /tmp/tunnel-client.log
 [tunnel:ID] Gateway open for abc123
 ```
 
-**Unhealthy patterns:**
+**Problem patterns:**
 
 | Log Pattern | Cause | Fix |
 |---|---|---|
-| `Gateway open` then immediate `Gateway closed` | Gateway rejecting connection | Check Origin header in .env matches `DASHBOARD_ORIGIN` |
-| `Shutting down...` repeated | Process received SIGTERM | Something is killing it — check for conflicting watchdogs |
+| `Gateway open` → immediate `Gateway closed` | Origin header mismatch | Verify `DASHBOARD_ORIGIN` in .env matches `https://dashboard-production-3553.up.railway.app` |
+| `Shutting down...` repeated | Process receiving SIGTERM | Multiple competing watchdogs — kill all, restart one |
 | No recent output | Process hung or dead | Kill and restart |
-| `ECONNREFUSED` | Gateway not running on expected port | Verify port in .env matches eragon.json |
+| `ECONNREFUSED` | Gateway not running | Check port in .env, run `eragon gateway restart` |
 | `401` or auth errors | Wrong tunnel secret | Verify `TUNNEL_SECRET=corgi-tunnel-2026` |
 
-#### Step 5: Gateway connections open then immediately close
+#### Step 5: Gateway connections open then immediately close (rapid open/close cycle)
 
-This was a major recurring issue. Root causes found:
+Root causes found and fixed:
 
-1. **Origin header mismatch**: The gateway checks `allowedOrigins`. The tunnel client must send `Origin: https://dashboard-production-3553.up.railway.app` when connecting to the gateway. This is set via the `DASHBOARD_ORIGIN` env var.
+1. **Origin header mismatch**: Gateway checks `allowedOrigins`. Tunnel client must send `Origin: https://dashboard-production-3553.up.railway.app`. Set via `DASHBOARD_ORIGIN` env var.
 
-2. **Gateway protocol mismatch**: The gateway sends `connect.challenge` first. If the browser's response doesn't reach the gateway within the timeout (because the relay was waiting for browser message before routing), connections die immediately. Fix: relay v3.1 routes on connect using token query param.
+2. **Relay protocol mismatch (v3.0 bug, fixed in v3.1)**: Relay v3.0 waited for browser's first message to decide routing. But the gateway sends `connect.challenge` first — so the relay sat in dead silence. Fix: relay v3.1 routes on connect using token from URL query param `/ws?token=<TOKEN>`.
 
-3. **Multiple watchdog instances**: If multiple watchdog loops are running, they compete — one opens a gateway connection, another's process gets killed, connection drops. Always `pkill -f "corgi-tunnel.*client.js"` before starting a new watchdog.
+3. **Multiple watchdog instances**: Competing bash loops each start a node process, they fight for the same gateway connection. Fix: always `pkill -f "node.*client\.js"` before starting a new watchdog.
 
 #### Step 6: Test the full path manually
 
-Direct gateway test (bypasses relay):
+**Direct gateway test** (bypasses relay and tunnel):
 ```bash
-cd ~/corgi-tunnel/client && node -e "
+cd ~/corgi-tunnel/client && source .env && export GATEWAY_URL GATEWAY_TOKEN DASHBOARD_ORIGIN
+node -e "
 const WS=require('ws');
 const ws=new WS(process.env.GATEWAY_URL,{headers:{Origin:process.env.DASHBOARD_ORIGIN}});
 ws.on('open',()=>console.log('OPEN'));
@@ -182,32 +203,76 @@ setTimeout(()=>{ws.close();process.exit(0)},8000);
 
 Expected: `OPEN → event connect.challenge → sent connect → res (hello-ok) → event health → event tick`
 
-Through-relay test:
+**Through-relay test** (full path, same as browser):
 ```bash
+cd ~/corgi-tunnel/client && source .env && export GATEWAY_TOKEN
 node -e "
 const WS=require('ws');
 const ws=new WS('wss://relay-production-724a.up.railway.app/ws?token='+encodeURIComponent(process.env.GATEWAY_TOKEN));
 ws.on('open',()=>console.log('RELAY OPEN'));
-ws.on('message',d=>{const m=JSON.parse(d.toString());console.log(m.type,m.event||'')});
+ws.on('message',d=>{const m=JSON.parse(d.toString());console.log(m.type,m.event||'');if(m.event==='connect.challenge'){ws.send(JSON.stringify({type:'req',id:'t1',method:'connect',params:{minProtocol:3,maxProtocol:3,auth:{token:process.env.GATEWAY_TOKEN},role:'operator',scopes:['operator.admin'],caps:['tool-events'],client:{id:'test',version:'1.0.0'}}}));console.log('→ sent connect')}});
 ws.on('close',(c,r)=>console.log('CLOSED',c,r.toString()));
 setTimeout(()=>{ws.close();process.exit(0)},8000);
 "
 ```
 
+**Test chat.history through relay** (proves data flows end-to-end):
+```bash
+cd ~/corgi-tunnel/client && source .env && export GATEWAY_TOKEN
+node -e "
+const WS=require('ws');
+const ws=new WS('wss://relay-production-724a.up.railway.app/ws?token='+encodeURIComponent(process.env.GATEWAY_TOKEN));
+let ok=false;
+ws.on('message',d=>{
+  const m=JSON.parse(d.toString());
+  if(m.event==='connect.challenge'){ws.send(JSON.stringify({type:'req',id:'c1',method:'connect',params:{minProtocol:3,maxProtocol:3,auth:{token:process.env.GATEWAY_TOKEN},role:'operator',scopes:['operator.admin'],caps:['tool-events'],client:{id:'test',version:'1.0.0'}}}));}
+  if(m.type==='res'&&m.id==='c1'&&m.ok){ws.send(JSON.stringify({type:'req',id:'h1',method:'chat.history',params:{limit:3}}));}
+  if(m.type==='res'&&m.id==='h1'){console.log('✓ chat.history:',(m.payload?.messages?.length||0),'messages');ws.close();process.exit(0);}
+});
+setTimeout(()=>{console.log('TIMEOUT');process.exit(1)},10000);
+"
+```
+
 If direct works but relay doesn't → relay or tunnel issue.
 If neither works → gateway issue.
+If both work but browser doesn't → browser cache, extension, or proxy issue (try incognito).
+
+### Chat History Not Loading (Skeleton Stuck)
+
+Dashboard connects (green dot) but messages show as gray loading skeletons.
+
+**Root cause found:** The dashboard's `serve.js` was serving files from a `dist/` subdirectory but the actual built files were in the repo root. Every deploy appeared to succeed but served stale old JS that didn't have the latest fixes.
+
+**Diagnosis:**
+```bash
+# Check what JS the dashboard is actually serving
+curl -s "https://dashboard-production-3553.up.railway.app/" | grep -o 'index-[A-Za-z0-9_-]*\.js'
+```
+
+Compare with what's in the deploy repo. If they don't match → `serve.js` is looking in the wrong directory.
+
+**Other causes:**
+- `chat.history` request timing out (15s timeout, 3 retries with backoff built in)
+- Gateway returning empty messages (filtered too aggressively)
+- Tap the skeleton to manually trigger a retry (built into UI)
+
+**Fix (dashboard deploy repo):** Ensure `serve.js` has `const DIST = __dirname;` (serve from repo root), NOT `const DIST = path.join(__dirname, 'dist');`.
 
 ### Browser Shows "Disconnected" (Never Connects)
 
-- Token not entered in dashboard Settings (must paste gateway auth token)
+- No token entered in dashboard Settings
 - Wrong WebSocket URL (must be `wss://relay-production-724a.up.railway.app/ws`)
-- Browser may have cached old JS — hard refresh (Cmd+Shift+R)
+- Service worker caching stale HTML/JS → hard refresh (Cmd+Shift+R)
+- Try incognito to rule out extensions
 
-### Tunnel Works from CLI but Not from Browser
+### Deploy Goes Through but Old JS Still Served
 
-- Browser WebSocket may have different timeout behavior
-- Check browser console (F12 → Console) for WebSocket errors
-- Try incognito window to rule out extension interference
+**Root cause found and fixed:** The deploy repo's `serve.js` referenced a `dist/` subdirectory that contained stale files from a previous build structure. New dist files were copied to the repo root. Railway deployed successfully but `serve.js` kept reading old files from `dist/`.
+
+**Prevention:** After copying new build artifacts to the deploy repo:
+1. Ensure there's no stale `dist/` subdirectory
+2. Verify `serve.js` serves from the correct path (`__dirname` for root)
+3. Check deployed JS hash matches: `curl -s <dashboard-url>/ | grep -o 'index-[A-Za-z0-9_-]*\.js'`
 
 ## .env Reference
 
@@ -230,6 +295,9 @@ DASHBOARD_ORIGIN=https://dashboard-production-3553.up.railway.app
 | Keepalive script | `~/corgi-tunnel/client/ensure-running.sh` |
 | Tunnel log | `/tmp/tunnel-client.log` |
 | Eragon config | `~/.eragon-*/eragon.json` |
+| Dashboard deploy repo | `corgi-gcp/corgi-dashboard-app` on GitHub |
+| Dashboard serve.js | In deploy repo root: `serve.js` |
+| Relay source | `corgi-gcp/corgi-relay` on GitHub |
 
 ## User Onboarding Message
 
